@@ -14,6 +14,16 @@ class patch:
         self.apod_file = apod_file
         self.beam_file = beam_file
         self.lmax = lmax
+        self.nfreq=nfreq
+        self.ncombo = nfreq * (nfreq+1)/2
+        self.pairs = np.zeros([self.ncombo,2],dtype=int)
+        k=0
+        for i in range(nfreq):
+            for j in range(i,nfreq):
+                self.pairs[k,0]=i
+                self.pairs[k,1]=j
+                k+=1
+        
         #splaceholders for loading spectra
         self.fg_spectra = load_fgs(fg_file,lmax)
         self.cmb_spectra = load_camb(camb_file, lmax)
@@ -34,7 +44,26 @@ class patch:
     def create_fgs(self):
         pass
 
-    def create_noise(self):
+    def create_noise(self,index=None):
+        '''
+        Assumes have a set of PSDs
+        An individual PSD is npad x npad in size
+        For 3 observing freqs, have 6 PSDs --
+        eg 90x90;, 90x150, 90x220, 150x150, 150x220, 220x220)
+        ordering from self.pairs
+        '''
+        gaussian_real = np.random.normal(size = [self.npad,self.npad,self.nfreq])
+        Cov_4d = np.zeros([self.npad,self.npad,self.nfreq,self.nfreq])
+        k=0
+        for i in range(self.nfreq):
+            for j in range(i,self.nfreq):
+                Cov_4d[:,:,i,j] = Cov_4d[:,:,j,i] = self.psds[k,:,:]
+                k+=1
+
+        #now a bunch of matrix multiplies
+        Cholesky = np.linalg.cholesky(Cov_4d)
+        out_maps = np.einsum(Cholesky, gaussian_real, stuff to define indices)
+
         pass
 
     def lens_maps(self, large_maps):
