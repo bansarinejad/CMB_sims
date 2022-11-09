@@ -1,6 +1,24 @@
 import numpy
 
 
+
+def create_correlated_power(cov_4d):
+    '''Will be used by both the noise and FG codes
+    
+    dimensions of cov_4d are npad x npad x nf x nf
+    
+    '''
+
+    npad = cov_4d.shape[0]
+    nfreq = cov_4d.shape[2]
+    gaussian_real = np.random.normal(size = [npad,npad,nfreq])
+
+        #now a bunch of matrix multiplies
+    Cholesky = np.linalg.cholesky(cov_4d)
+    out_maps = np.einsum(Cholesky, gaussian_real, stuff to define indices)
+    return out_maps
+
+
 class patch:
     def __init__(self,reso_arcmin=0.5, npad = 256, nfinal = 128, nfreq = 3, lmax = 15000,
                 camb_file = None, fg_file = None, psd_file = None, filter_file = None,apod_file=None, beam_file=None) -> None:
@@ -38,13 +56,44 @@ class patch:
         self.dell_pad = 2*np.pi/(self.npad * reso)
         self.ell1d = 2*np.pi * np.fft.fftfreq(self.npad,d=reso)
     
-    def create_cmb(self):
-        pass
+    def create_cmb(self,Cov_4d = None):
+        '''
+        what basis? if IQU will need to change this code to iterate over 3-vectors, which is doing T/E (2-vector) here
+        '''
+        if Cov_4d is None:
+            Cov_4d = np.zeros([self.npad,self.npad,2,2])
+            theory_psd = self.camb_to_psd(0,0)
+            Cov_4d[:,:,0,0]=theory_psd
+            theory_psd = self.camb_to_psd(1,1)
+            Cov_4d[:,:,1,1]=theory_psd
+            theory_psd = self.camb_to_psd(0,1)
+            Cov_4d[:,:,0,1]=Cov_4d[:,:,1,0]=theory_psd
 
-    def create_fgs(self):
-        pass
+        return create_correlated_power(Cov_4d)
 
-    def create_noise(self,index=None):
+    def create_fgs(self,Cov_4d = None):
+        '''
+        Assumes have a set of Theory Spectra
+        Will turrn each spectrum to a PSD that is npad x npad in size
+        and combine these to create correlated noise
+        eg 90x90;, 90x150, 90x220, 150x150, 150x220, 220x220)
+        ordering from self.pairs
+
+        Can also pass in an existing Cov structure, in which case, it skips to creating the realization. 
+        '''
+        if Cov_4d is None:
+            Cov_4d = np.zeros([self.npad,self.npad,self.nfreq,self.nfreq])
+            k=0
+            for i in range(self.nfreq):
+                for j in range(i,self.nfreq):
+                    theory_psd = self.turn_spectra_to_psd(i,j)
+                    Cov_4d[:,:,i,j] = Cov_4d[:,:,j,i] = theoy_psd
+                    k+=1
+
+        return create_correlated_power(Cov_4d)
+
+
+    def create_noise(self,Cov_4d = None):
         '''
         Assumes have a set of PSDs
         An individual PSD is npad x npad in size
@@ -52,19 +101,15 @@ class patch:
         eg 90x90;, 90x150, 90x220, 150x150, 150x220, 220x220)
         ordering from self.pairs
         '''
-        gaussian_real = np.random.normal(size = [self.npad,self.npad,self.nfreq])
-        Cov_4d = np.zeros([self.npad,self.npad,self.nfreq,self.nfreq])
-        k=0
-        for i in range(self.nfreq):
-            for j in range(i,self.nfreq):
-                Cov_4d[:,:,i,j] = Cov_4d[:,:,j,i] = self.psds[k,:,:]
-                k+=1
+        if Cov_4d is None:
+            Cov_4d = np.zeros([self.npad,self.npad,self.nfreq,self.nfreq])
+            k=0
+            for i in range(self.nfreq):
+                for j in range(i,self.nfreq):
+                    Cov_4d[:,:,i,j] = Cov_4d[:,:,j,i] = self.psds[k,:,:]
+                    k+=1
 
-        #now a bunch of matrix multiplies
-        Cholesky = np.linalg.cholesky(Cov_4d)
-        out_maps = np.einsum(Cholesky, gaussian_real, stuff to define indices)
-
-        pass
+        return create_correlated_power(Cov_4d)
 
     def lens_maps(self, large_maps):
         pass
