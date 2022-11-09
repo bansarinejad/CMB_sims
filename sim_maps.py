@@ -111,7 +111,13 @@ class patch:
             return expand_1d_to_2d(ll,Cl)
         
             
-    
+    def create_cmb_qu(self, Cov_4d = None):
+        te_maps = self.create_cmb(Cov_4d=Cov_4d)
+
+        tmap = np.squeeze(te_maps[:,:,0])
+        qmap, umap = convert_e_to_qu(np.squeeze(te_maps[:,:,1]))
+        return tmap, qmap, umap
+
     def create_cmb(self,Cov_4d = None):
         '''
         This is done in the TE basis.
@@ -228,3 +234,14 @@ class patch:
         bl2d = expand_1d_to_2d(lbl,bl)
         return large_maps * bl2d
 
+    def convert_e_to_qu(fourier_e_largemap):
+        '''
+        Takes Fourier maps E (B assumed 0) and converts to Q/U (still in Fourier space)
+        '''
+        lx = np.tile(self.ell1d, [1,self.npad])
+
+        angle = 2 * np.arctan2(lx, -1*lx.T)
+        cosang = np.cos(angle)
+        sinang = np.sin(angle)
+
+        return cosang * fourier_e_largemap, sinang * fourier_e_largemap
