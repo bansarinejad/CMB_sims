@@ -47,6 +47,7 @@ def fill_in_theory(files,ells,cl2dl=False):
 
 class patch:
     def __init__(self,reso_arcmin=0.5, npad = 256, nfinal = 128, nfreq = 3, lmax = 15000,
+                 freq_names=['95,'150','220'],
                 camb_file = None, fg_file = None, psd_file = None, filter_file = None,apod_file=None, 
                 beam_file=None) -> None:
         self.reso_arcmin = reso_arcmin
@@ -58,11 +59,13 @@ class patch:
         self.filter_file = filter_file
         self.apod_file = apod_file
         self.beam_file = beam_file
+        
         self.lmax = lmax
         if lmax >= 15000:
             print('Warning: default spt3g beam file stopped at l=14999, vs requested lmax = {}'.format(lmax))
         self.ells = range(lmax+1)
         self.nfreq=nfreq
+        self.freq_names=freq_names
         self.ncombo = nfreq * (nfreq+1)/2
         self.pairs = np.zeros([self.ncombo,2],dtype=int)
         k=0
@@ -181,8 +184,27 @@ class patch:
 
         return create_correlated_power(Cov_4d)
 
-    def lens_maps(self, large_maps):
-        pass
+    def lens_map(self, map, deflection_x_map, deflection_y_map, poly_deg = 5):
+        '''
+        Assume lensing is zero by the edge of the small map
+        Could pass in larger map if desired.
+        '''
+        nx = deflection_x_map.shape[0]
+        ny = deflection_x_map.shape[1]
+        ynx = deflection_y_map.shape[0]
+        yny = deflection_y_map.shape[1]
+        mnx = maps.shape[0]
+        mny = maps.shape[1]
+        assert nx == ny == mnx == mny == yny == ynx  # only doing squares
+        x = np.arange(0,nx) * (self.reso_arcmin * np.pi/180)
+        x2d = np.tile(x,[1,nx])
+        y2d = x2d.T
+        
+        mod_theta_x_grid = (x2d + deflection_x_map).flatten()
+        mod_theta_y_grid = (x2d.T + deflection_y_map).flatten()
+
+        lensed_map  = intrp.RectBivariateSpline( x, x, map, kx = poly_deg, ky = poly_deg).ev(mod_theta_y_grid, mod_theta_x_grid).reshape([nx,nx])
+        return lensed_map
 
     def filter_map(self, large_map, index = None, map_in_fourier = True):
         '''Apply filter in Fourier space. Does not return to real space'''
@@ -222,6 +244,8 @@ class patch:
     def source_interpolate(self, map, source_mask):
         pass
 
+
+
     def apply_beam(self,large_maps, index, map_in_fourier = True):
         '''Apply beams in Fourier space. Does not return to real space'''
         if not map_in_fourier:
@@ -245,3 +269,54 @@ class patch:
         sinang = np.sin(angle)
 
         return cosang * fourier_e_largemap, sinang * fourier_e_largemap
+
+
+    def create_sim_map(self):
+        ft,fq,fu = self.create_cmb_qu()
+        #get def angles
+        #got to real space:
+        t = np.fft.ifft2(ft).real
+        q = np.fft.ifft2(fq).real
+        u = np.fft.ifft2(fu).real
+        #may only do the following on a portion of the large map...
+        lens_t = self.lens_map(t, def_x, def_y)
+        lens_q = self.lens_map(q, def_x, def_y)
+        lens_u = self.lens_map(u, def_x, def_y)
+        #and back to Fourier:
+        f_lens_t = np.fft.fft2(lens_t)
+        f_lens_q = np.fft.fft2(lens_q)
+        f_lens_u = np.fft.fft2(lens_u)
+        #this will be temp only
+        fgs = self.create_fgs()
+        # consider adding pol fgs, or continuing to assume zero
+        #ufgs = self.create_fgs(pol=True)
+        #qfgs = self.create_fgs(pol=True)
+
+        ft_all = {}
+        fq_all = {}
+        fu_all = {}
+        if i in range(self.nfreq):
+            pdb.set_trace() # confirm if filtering depends on T/Q/U or not
+            ft_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_t + np.squeeze(fgs[:,:,0]) ) ,i),i)
+            fq_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_q ),i),i)
+            fu_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_u ) ,i),i)
+
+        #could reorder this and above to reduce memory usage if useful
+        noise = self.create_noise()
+        out_t = {}
+        out_q = {}
+        out_u = {}
+        if i in range(self.nfreq):
+            pdb.set_trace() #almost certainly need to do something about how noise is defined
+            tmp = ft_all[self.freq_names[i]] + tnoise
+
+            pdb.set_trace() # need to confirm if desired output map is apodized or not
+            out_t[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real)  
+            
+            tmp = fq_all[self.freq_names[i]] + qnoise
+            out_q[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real) 
+
+            tmp = fu_all[self.freq_names[i]] + unoise
+            out_u[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real) 
+        
+        return out_t, out_q, out_u
