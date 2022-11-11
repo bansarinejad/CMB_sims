@@ -1,5 +1,5 @@
 import numpy
-
+from skimage import restoration #Behzad 10/11/22
 
 
 def create_correlated_power(cov_4d):
@@ -241,8 +241,13 @@ class patch:
         ''' Meansubtract, apodize and zeropad map'''
         return zeropad_map(apodize_map(map))
 
-    def source_interpolate(self, map, source_mask):
-        pass
+     def source_interpolate(self, map, source_mask):
+        '''Inpaint point sources using biharmonic function based on pixel values of the mask'''
+        sim_map=map
+        mask_two=np.copy(source_mask)
+        mask_two=np.where(mask_two<0.1,1.0,0.0)
+        sim_map_inpainted=restoration.inpaint_biharmonic(sim_map, mask_two)
+        return sim_map_inpainted
 
 
 
