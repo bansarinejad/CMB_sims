@@ -2,6 +2,17 @@ import numpy
 from skimage import restoration #Behzad 10/11/22
 
 
+def create_uncorrelated_power(cov_3d):
+    '''Will be used by both the noise and FG codes
+    
+    dimensions of cov_3d are npad x npad x nf
+    
+    '''
+
+    npad = cov_3d.shape[0]
+    nfreq = cov_3d.shape[2]
+    return np.random.normal(size = [npad,npad,nfreq]) * np.sqrt(cov_3d)
+
 def create_correlated_power(cov_4d):
     '''Will be used by both the noise and FG codes
     
@@ -48,14 +59,16 @@ def fill_in_theory(files,ells,cl2dl=False):
 class patch:
     def __init__(self,reso_arcmin=0.5, npad = 256, nfinal = 128, nfreq = 3, lmax = 15000,
                  freq_names=['95,'150','220'],
-                camb_file = None, fg_file = None, psd_file = None, filter_file = None,apod_file=None, 
+                camb_file = None, fg_file = None, fg_pol_file = None,psd_file = None,psd_pol_file = None, filter_file = None,apod_file=None, 
                 beam_file=None) -> None:
         self.reso_arcmin = reso_arcmin
         self.npad = npad
         self.nfinal = nfinal
         self.camb_file = camb_file
         self.fg_file = fg_file
+        self.fg_pol_file = fg_pol_file
         self.psd_file = psd_file
+        self.psd_pol_file = psd_pol_file
         self.filter_file = filter_file
         self.apod_file = apod_file
         self.beam_file = beam_file
@@ -69,20 +82,66 @@ class patch:
         self.ncombo = nfreq * (nfreq+1)/2
         self.pairs = np.zeros([self.ncombo,2],dtype=int)
         k=0
+        self.lookup = np.zeros([nfreq,nfreq],dtype=int)
         for i in range(nfreq):
             for j in range(i,nfreq):
                 self.pairs[k,0]=i
                 self.pairs[k,1]=j
+                self.lookup[i,j]=self.lookup[j,i]=k
                 k+=1
         
         #splaceholders for loading spectra
-        self.fg_spectra = (np.loadtxt(fg_file)).T #this is expected to yield an array: [1+nfreq, Nl]. 0 is l, 1-Ncombo is 90x90, 90x150, etc.
-        self.cmb_spectra = (np.loadtxt(camb_file)).T #this is expected to yield an array: [1+nfreq, Nl]. 0 is l, 1 is TT, 2 is EE, 3 is BB, 4 is TE
+        #assuming T/Pol correlation is zero for foregrounds. Likely wrong for galactic, shrug.
+        #assuming Q/U == E/B for FG pol spectra (ie 1 spectra covers all 4)
+        if fg_file is not None:
+            self.fg_spectra = (np.loadtxt(fg_file)).T #this is expected to yield an array: [1+nCombo, Nl]. 0 is l, 1-Ncombo is 90x90, 90x150, etc.
+        else:
+            print('zero temp fg')
+            self.fg_spectra = np.zeros([1+ncombo, Nl])
+            self.fg_spectra[0,:]=self.ells
+        if fg_pol_file is not None:
+            self.fg_pol_spectra = (np.loadtxt(fg_pol_file)).T #this is expected to yield an array: [1+ncombo, Nl]. 0 is l, 1-Ncombo is 90x90, 90x150, etc.
+        else:
+            print('zero pol fg')
+            self.fg_pol_spectra = np.zeros([1+ncombo, Nl])
+            self.fg_pol_spectra[0,:]=self.ells
+        
+        if camb_file is not None:
+            self.cmb_spectra = (np.loadtxt(camb_file)).T #this is expected to yield an array: [5, Nl]. 0 is l, 1 is TT, 2 is EE, 3 is BB, 4 is TE
+        else:
+            print("zero cmb")
+            self.cmb_spectra = np.zeros([1+ncombo, Nl])
+            self.cmb_spectra[0,:]=self.ells
         #palceholders for loading PSD and filters:
         #npad/reso passed in for error checking against what was used in creating the files
-        self.psds = load_psds(psd_file, lmax, npad, reso_arcmin)
-        self.filters = load_filters(psd_file, lmax, npad, reso_arcmin)
-        self.apod = load_apod(apod_file)
+        if psd_file is not None:
+            self.psds = np.load(psd_file) #expect array ncombo x npad x npad
+            #load_psds(psd_file, lmax, npad, reso_arcmin)
+        else:
+            print('zero temp noise')
+            self.psds = np.zeros(ncombo,npad,npad)
+        if psd_pol_file is not None:
+            self.pol_psds = np.load(psd_pol_file) #expect array nfreq x npad x npad -- we are taking pol noise to be uncorrelated to temp and also between freq bands
+            #load_psds(psd_file, lmax, npad, reso_arcmin)
+        else:
+            print('zero pol noise')
+            self.pol_psds = np.zeros(nfreq,npad,npad)
+            
+        if filter_file is not None:
+            self.filters = np.load(filter_file) #expect array dim nfreq x npad x npad
+            #load_filters(filter_file, lmax, npad, reso_arcmin)
+        else:
+            print("unity filter")
+            self.filters = np.ones(nfreq,npad,npad)
+        
+        if apod_file is not None:
+            self.apod = np.load(apod_file) #expect array npad x npad
+            #load_apod(apod_file)
+        else:
+            print("Stupid apod default!")
+            self.apod = np.zeros(npad,npad)
+            self.apod[:nfinal,:nfinal] =1.0
+            
         # expect something like: '/home/creichardt/spt3g_software/beams/products/compiled_2020_beams.txt'
         self.beams = (np.loadtxt(beam_file)).T  #this is expected to yield an array: [1+nfreq, Nl]. Note the above file's last ell = 14999
         
@@ -139,7 +198,16 @@ class patch:
 
         return create_correlated_power(Cov_4d)
 
-    def create_fgs(self,Cov_4d = None):
+    def fg_spectra_to_psd(self,i,j,pol=False):
+        fg = self.fg_spectra
+        if pol:
+            fg = self.fg_pol_spectra
+        ll = fg[0,:]
+        k = self.lookup(i,j)
+        Cl = fg[k+1,:]
+        return expand_1d_to_2d(ll,Cl)
+
+    def create_fgs(self,Cov_4d = None, pol=False):
         '''
         Assumes have a set of Theory Spectra
         Will turrn each spectrum to a PSD that is npad x npad in size
@@ -156,7 +224,7 @@ class patch:
             k=0
             for i in range(self.nfreq):
                 for j in range(i,self.nfreq):
-                    theory_psd = self.fg_spectra_to_psd(i,j)
+                    theory_psd = self.fg_spectra_to_psd(i,j,pol=pol)
                     Cov_4d[:,:,i,j] = Cov_4d[:,:,j,i] = theory_psd
                     k+=1
 
@@ -183,6 +251,28 @@ class patch:
                     k+=1
 
         return create_correlated_power(Cov_4d)
+        
+        
+    def create_pol_noise(self,Cov_3d = None):
+        '''
+        Assumes have a set of PSDs
+        An individual PSD is npad x npad in size
+        For 3 observing freqs, have 6 PSDs --
+        eg 90x90;, 90x150, 90x220, 150x150, 150x220, 220x220)
+        ordering from self.pairs
+        
+        This will return a_kk's. This should be added to the signal terms after they have had filtering and beams applied. 
+        (Presumably the PSD used here is from a filtered map and doesn't need additional transfer function due to filtering)
+        '''
+        if Cov_3d is None:
+            Cov_3d = np.zeros([self.npad,self.npad,self.nfreq])
+            
+            for i in range(self.nfreq):
+                Cov_3d[:,:,i] = self.pol_psds[k,:,:]
+
+        qmaps = create_uncorrelated_power(Cov_3d)
+        umaps = create_uncorrelated_power(Cov_3d)
+        return qmaps, umaps
 
     def lens_map(self, map, deflection_x_map, deflection_y_map, poly_deg = 5):
         '''
