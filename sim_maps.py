@@ -382,36 +382,38 @@ class patch:
         f_lens_q = np.fft.fft2(lens_q)
         f_lens_u = np.fft.fft2(lens_u)
         #this will be temp only
-        fgs = self.create_fgs()
+        t_fgs = self.create_fgs()
         # consider adding pol fgs, or continuing to assume zero
-        #ufgs = self.create_fgs(pol=True)
-        #qfgs = self.create_fgs(pol=True)
+        u_fgs = self.create_fgs(pol=True)
+        q_fgs = self.create_fgs(pol=True)
 
         ft_all = {}
         fq_all = {}
         fu_all = {}
         if i in range(self.nfreq):
             pdb.set_trace() # confirm if filtering depends on T/Q/U or not
-            ft_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_t + np.squeeze(fgs[:,:,0]) ) ,i),i)
-            fq_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_q ),i),i)
-            fu_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_u ) ,i),i)
+            ft_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_t + np.squeeze(fgs[:,:,i]) ) ,i),i)
+            fq_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_q + np.squeeze(u_fgs[:,:,i])),i),i)
+            fu_all[self.freq_names[i]] = self.filter_map(self.apply_beam((f_lens_u + np.squeeze(q_fgs[:,:,i])) ,i),i)
 
         #could reorder this and above to reduce memory usage if useful
-        noise = self.create_noise()
+        t_noise = self.create_noise()
+        q_noise = self.create_noise(pol=True)
+        u_noise = self.create_noise(pol=True)
         out_t = {}
         out_q = {}
         out_u = {}
         if i in range(self.nfreq):
             pdb.set_trace() #almost certainly need to do something about how noise is defined
-            tmp = ft_all[self.freq_names[i]] + tnoise
+            tmp = ft_all[self.freq_names[i]] + t_noise[:,:,i]
 
             pdb.set_trace() # need to confirm if desired output map is apodized or not
             out_t[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real)  
             
-            tmp = fq_all[self.freq_names[i]] + qnoise
+            tmp = fq_all[self.freq_names[i]] + q_noise[:,:,i]
             out_q[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real) 
 
-            tmp = fu_all[self.freq_names[i]] + unoise
+            tmp = fu_all[self.freq_names[i]] + u_noise[:,:,i]
             out_u[freq_names[i]] = self.cut_map(np.fft.ifft2(tmp).real) 
         
         return out_t, out_q, out_u
